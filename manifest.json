@@ -1,0 +1,12 @@
+{
+    "display_name": "POV Agents / 局部视角代理",
+    "loading_order": 80,
+    "js": "index.js",
+    "author": "你的名字或ID",
+    "version": "1.0.0",
+    "homePage": "https://github.com/你的用户名/pov-agents",
+    "generate_interceptor": "povAgentsBeforeGenerate",
+    "requires": [],
+    "optional": [],
+    "auto_update": false
+}

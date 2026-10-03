@@ -37,6 +37,26 @@ SillyTavern/public/scripts/extensions/third-party/pov-agents/
 - 从 Git 安装：扩展面板里点 **更新**
 - 手动安装：重新下载覆盖文件夹后刷新页面
 
+#### 如果「更新」检测不到新版本
+
+SillyTavern 的更新检查依赖 `git fetch`（访问 **github.com**）。若你的网络访问不了 github.com，就永远检测不到更新。此时用 zip 手动更新：
+
+1. 下载最新 zip（走 codeload，通常比 github.com 更容易访问）：
+
+   ```
+   https://codeload.github.com/daidaicong/pov-agents/zip/refs/heads/main
+   ```
+
+   固定版本：把 `main` 换成 `refs/tags/v1.4.1`
+
+2. 解压得到 `pov-agents-main/` 文件夹
+3. 用里面的文件**覆盖**你的扩展目录：
+   - Git 安装：`SillyTavern/data/<你的用户名>/extensions/pov-agents/`
+   - 手动安装：`SillyTavern/public/scripts/extensions/third-party/pov-agents/`
+4. 刷新页面（`Ctrl+Shift+R`）
+
+> 覆盖后扩展目录里的 `.git` 会与文件不一致，之后网络恢复时建议删掉整个目录重新用 Git URL 安装一次。
+
 ---
 
 ## 快速开始

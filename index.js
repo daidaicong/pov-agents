@@ -25,6 +25,10 @@ const DEFAULT_SETTINGS = {
     childApiKey: '',
     childModel: '',
     childPreset: '',
+    fixedRoleEnabled: false,
+    fixedRoleName: '',
+    fixedRoleProfile: '',
+    fixedRoleTask: '',
     prompts: {},
     responseLength: 2048,
 };
@@ -40,6 +44,10 @@ function getSettings() {
     settings.childApiKey ??= DEFAULT_SETTINGS.childApiKey;
     settings.childModel ??= DEFAULT_SETTINGS.childModel;
     settings.childPreset ??= DEFAULT_SETTINGS.childPreset;
+    settings.fixedRoleEnabled ??= DEFAULT_SETTINGS.fixedRoleEnabled;
+    settings.fixedRoleName ??= DEFAULT_SETTINGS.fixedRoleName;
+    settings.fixedRoleProfile ??= DEFAULT_SETTINGS.fixedRoleProfile;
+    settings.fixedRoleTask ??= DEFAULT_SETTINGS.fixedRoleTask;
     settings.prompts ??= {};
     settings.inlineDelegation ??= DEFAULT_SETTINGS.inlineDelegation;
     settings.showTrace ??= DEFAULT_SETTINGS.showTrace;
@@ -105,6 +113,21 @@ function renderSettings() {
                     <input id="pov_agents_toast" type="checkbox" ${settings.showToast ? 'checked' : ''}>
                     <span>调用子代理时弹出提示（右上角短暂提示，便于确认本轮是否触发）</span>
                 </label>
+                <details id="pov_agents_fixed_role">
+                    <summary><b>固定扮演模式（子代理始终扮演同一个角色）</b></summary>
+                    <small>适合只有两个人的故事：你预先写好该角色的设定，主 AI 只负责提供客观事实与感知；它塞进来的性格/心理推测会被忽略。</small>
+                    <label class="checkbox_label">
+                        <input id="pov_agents_fixed_enabled" type="checkbox" ${settings.fixedRoleEnabled ? 'checked' : ''}>
+                        <span>启用固定扮演模式</span>
+                    </label>
+                    <label for="pov_agents_fixed_name">角色名（仅用于显示）</label>
+                    <input id="pov_agents_fixed_name" class="text_pole" type="text" placeholder="例如：洛晴雪" value="${escapeHtml(settings.fixedRoleName)}">
+                    <label for="pov_agents_fixed_profile">固定设定（权威，不受本轮剧情影响）</label>
+                    <textarea id="pov_agents_fixed_profile" class="text_pole textarea_compact" rows="8" placeholder="身份、性格、说话习惯、认知边界、禁忌、已知与未知……">${escapeHtml(settings.fixedRoleProfile)}</textarea>
+                    <label for="pov_agents_fixed_task">固定推演任务（留空则用默认）</label>
+                    <textarea id="pov_agents_fixed_task" class="text_pole textarea_compact" rows="3" placeholder="留空 = 以该角色的有限视角，推演其此刻会注意到什么、会怎么想、最可能怎么做。">${escapeHtml(settings.fixedRoleTask)}</textarea>
+                </details>
+
                 <label for="pov_agents_mode">子代理连接方式</label>
                 <select id="pov_agents_mode" class="text_pole">
                     <option value="custom" ${settings.connectionMode === 'custom' ? 'selected' : ''}>自定义 API（默认；全部留空即继承主 AI）</option>
@@ -200,6 +223,10 @@ function renderSettings() {
         settings.childModel = container.querySelector('#pov_agents_model').value.trim();
         settings.childApiKey = container.querySelector('#pov_agents_api_key').value.trim();
         settings.childPreset = container.querySelector('#pov_agents_preset').value;
+        settings.fixedRoleEnabled = container.querySelector('#pov_agents_fixed_enabled').checked;
+        settings.fixedRoleName = container.querySelector('#pov_agents_fixed_name').value.trim();
+        settings.fixedRoleProfile = container.querySelector('#pov_agents_fixed_profile').value.trim();
+        settings.fixedRoleTask = container.querySelector('#pov_agents_fixed_task').value.trim();
         settings.responseLength = Number(container.querySelector('#pov_agents_response_length').value) || DEFAULT_SETTINGS.responseLength;
 
         // Only store prompt overrides that actually differ from the built-in defaults.
@@ -355,8 +382,14 @@ async function consultLocalPovAgent({ task, context, role_instructions = '' } = 
     const agentTask = task.trim();
     const agentContext = String(context ?? '').trim();
     const agentRoleInstructions = String(role_instructions ?? '').trim();
+    const roleInstructionsBlock = agentRoleInstructions
+        ? (getSettings().fixedRoleEnabled
+            ? agentRoleInstructions
+            : `主 AI 提供的角色视角/限制：\n${agentRoleInstructions}`)
+        : '';
     const systemPrompt = applyTemplate(getPromptTemplate('childSystem'), {
-        roleInstructions: agentRoleInstructions ? `主 AI 提供的角色视角/限制：\n${agentRoleInstructions}` : '',
+        roleInstructions: agentRoleInstructions,
+        roleInstructionsBlock,
     }).trim();
     const prompt = [
         `主 AI 的具体任务：\n${agentTask}`,
@@ -590,7 +623,7 @@ const PROMPT_TEMPLATES = {
     },
     childSystem: {
         label: '③ 子代理 — 系统提示',
-        hint: '发给子 AI 的角色约束与输出格式。占位符：{{roleInstructions}}（主 AI 填写的角色视角/边界，可能为空）。',
+        hint: '发给子 AI 的角色约束与输出格式。占位符：{{roleInstructionsBlock}}（角色设定块，可能为空）、{{roleInstructions}}（仅设定正文）。',
         value: [
             '你是一个被主 AI 临时调用的局部视角子代理。主 AI 是导演，掌握完整上下文；你只获得它明确传来的任务与材料。',
             '绝不假定你看到了未提供的角色卡、世界书、聊天记录或设定。把材料当作全部可用证据；缺失信息必须指出，不可补造。',
@@ -599,7 +632,28 @@ const PROMPT_TEMPLATES = {
             '给出可直接供主 AI 取舍的建议；区分材料明确支持的内容与推测，并指出关键不确定性。',
             '输出格式：先给出分析，最后另起一节，标题写成 `### 三条结论`，下面用三行短句（每行不超过 30 字）依次列出：① 该角色的认知边界（不知道什么）；② 此刻的情绪/身体状态；③ 最可能的行为方向。三行必须能被主 AI 直接当作写作依据。',
             '',
-            '{{roleInstructions}}',
+            '{{roleInstructionsBlock}}',
+        ].join('\n'),
+    },
+    fixedDecisionFormat: {
+        label: '⑤ 固定扮演 — 导演决策格式',
+        hint: '开启固定扮演模式时使用。只让主 AI 提供客观事实与感知，不要求它写角色设定。占位符：无。',
+        value: [
+            '需要时输出：{"delegate":true,"context":"..."}',
+            '不需要时输出：{"delegate":false}',
+            '说明：本轮你只需要提供【客观事实摘要】与【该角色能感知到的信息】。',
+            '- context：故事至今发生的客观事实 + 该角色此刻能看到/听到/闻到/触到的内容。',
+            '- 严禁写入任何角色的性格、心理、动机、情绪推测或未公开设定；这些由扩展提供的固定设定决定。',
+            '- 不要输出 task 与 role_instructions：推演任务与角色设定由扩展提供。',
+        ].join('\n'),
+    },
+    fixedRoleGuard: {
+        label: '⑥ 固定扮演 — 设定优先声明',
+        hint: '追加到子代理系统提示末尾，用于忽略主 AI 塞进来的性格/心理推测。占位符：无。',
+        value: [
+            '【固定设定优先】上面的「固定设定」由用户预先写好，是权威设定，优先级高于材料中的任何描述。',
+            '若材料中出现关于该角色性格、心理、动机、情绪的推测或结论，一律忽略，不得作为依据；只采纳其中的客观事实与感知信息。',
+            '若材料与固定设定冲突，以固定设定为准。',
         ].join('\n'),
     },
     injection: {
@@ -670,10 +724,14 @@ async function runPovAgentDirectorGuidance(chat, _contextSize, abort, type) {
     const context = getContext();
 
     try {
+        const settings = getSettings();
+        const fixedProfile = String(settings.fixedRoleProfile ?? '').trim();
+        const useFixedRole = Boolean(settings.fixedRoleEnabled && fixedProfile);
+
         const decisionPrompt = [
-            getPromptTemplate('decisionFormat'),
-            getSettings().alwaysDelegate ? '【强制委派】本轮必须委派。直接输出 delegate=true 及 task/context/role_instructions，禁止输出 {"delegate":false}。若不确定推演哪个角色，就选本轮最活跃/最受影响的那个。' : '',
-            getSettings().aggressive ? '（更积极模式）除非本轮完全不涉及任何角色，否则请委派一次。' : '',
+            useFixedRole ? getPromptTemplate('fixedDecisionFormat') : getPromptTemplate('decisionFormat'),
+            settings.alwaysDelegate ? '【强制委派】本轮必须委派。直接输出 delegate=true 及参数，禁止输出 {"delegate":false}。' : '',
+            settings.aggressive ? '（更积极模式）除非本轮完全不涉及任何角色，否则请委派一次。' : '',
             await buildSettingExcerpt(context, chat),
             `【最近对话】\n${buildSceneExcerpt(chat)}`,
         ].filter(Boolean).join('\n\n');
@@ -682,7 +740,7 @@ async function runPovAgentDirectorGuidance(chat, _contextSize, abort, type) {
         if (abort?.aborted) return;
 
         const decision = parseDecision(rawDecision);
-        if (!decision?.delegate || !String(decision.task ?? '').trim()) {
+        if (!decision?.delegate) {
             console.debug('[POV Agents] 导演判断本轮无需子代理。', rawDecision.slice(0, 200));
             if (getSettings().showToast && typeof toastr !== 'undefined') {
                 toastr.info('本轮未委派（导演判断无需子代理）', 'POV Agents', { timeOut: 4000 });
@@ -690,11 +748,33 @@ async function runPovAgentDirectorGuidance(chat, _contextSize, abort, type) {
             return;
         }
 
-        const task = String(decision.task ?? '').trim();
-        const agentContext = String(decision.context ?? '').trim();
-        const roleInstructions = String(decision.role_instructions ?? '').trim();
+        let task;
+        let agentContext;
+        let roleInstructions;
 
-        console.debug('[POV Agents] 导演决定委派子代理，正在调用…');
+        if (useFixedRole) {
+            // Fixed-role mode: the character sheet and the task come from the user,
+            // the main AI only supplies objective facts and perceptions.
+            task = String(settings.fixedRoleTask ?? '').trim()
+                || `以${settings.fixedRoleName || '该角色'}的有限视角，推演其此刻会注意到什么、会怎么想、最可能怎么做。`;
+            agentContext = String(decision.context ?? '').trim();
+            roleInstructions = [
+                `【固定设定（权威）】\n${fixedProfile}`,
+                `【固定任务】\n${task}`,
+                getPromptTemplate('fixedRoleGuard'),
+            ].join('\n\n');
+        } else {
+            task = String(decision.task ?? '').trim();
+            agentContext = String(decision.context ?? '').trim();
+            roleInstructions = String(decision.role_instructions ?? '').trim();
+        }
+
+        if (!task) {
+            console.debug('[POV Agents] 决策缺少 task，跳过本轮委派。');
+            return;
+        }
+
+        console.debug(`[POV Agents] 导演决定委派子代理${useFixedRole ? `（固定扮演：${settings.fixedRoleName || '未命名'}）` : ''}，正在调用…`);
 
         const childReply = await consultLocalPovAgent({ task, context: agentContext, role_instructions: roleInstructions });
         if (abort?.aborted) return;
@@ -718,6 +798,7 @@ async function runPovAgentDirectorGuidance(chat, _contextSize, abort, type) {
             id: `pov-${Date.now()}`,
             displayName: TOOL_DISPLAY_NAME,
             name: TOOL_NAME,
+            fixedRole: useFixedRole ? (settings.fixedRoleName || '固定角色') : '',
             parameters: JSON.stringify({ task, context: agentContext, role_instructions: roleInstructions }),
             result: childReply,
             keyPoints,
@@ -1141,6 +1222,10 @@ function extractKeyPoints(text) {
  */
 function describeDelegationTarget(invocations) {
     if (!Array.isArray(invocations) || !invocations.length) return '';
+
+    if (invocations[0].fixedRole) {
+        return `固定扮演：${invocations[0].fixedRole}`;
+    }
 
     let params = invocations[0].parameters;
     if (typeof params === 'string') {

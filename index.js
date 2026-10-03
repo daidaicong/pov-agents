@@ -2,7 +2,7 @@ import { extension_settings, getContext } from '../../../extensions.js';
 import { setExtensionPrompt, extension_prompt_types, extension_prompt_roles } from '../../../../script.js';
 
 const EXTENSION_KEY = 'povAgents';
-const EXTENSION_VERSION = 'v7-prompt-editor';
+const EXTENSION_VERSION = 'v8-modal-ui';
 const PROMPT_KEY = 'pov-agents-director-guidance';
 const RECENT_PROMPT_KEY = 'pov-agents-recent-reminder';
 const RESULT_PROMPT_KEY = 'pov-agents-child-result';
@@ -62,142 +62,283 @@ function saveSettings() {
     getContext().saveSettingsDebounced();
 }
 
+/**
+ * Injects the styles used by the settings panel and the floating settings window.
+ */
+function injectSettingsStyles() {
+    if (document.getElementById('pov_agent_settings_style')) return;
+    const style = document.createElement('style');
+    style.id = 'pov_agent_settings_style';
+    style.textContent = `
+        .pov-ver { opacity: .55; font-weight: normal; font-size: .85em; }
+        .pov-modal {
+            position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; z-index: 30000; display: none;
+            align-items: center; justify-content: center;
+            background: rgba(0, 0, 0, .55);
+        }
+        .pov-modal.pov-open { display: flex; }
+        .pov-modal-box {
+            width: min(860px, 94vw); height: min(760px, 90vh);
+            display: flex; flex-direction: column;
+            background: var(--SmartThemeBlurTintColor, #1e1e1e);
+            color: var(--SmartThemeBodyColor, #ddd);
+            border: 1px solid var(--SmartThemeBorderColor, #555);
+            border-radius: 12px; overflow: hidden;
+            box-shadow: 0 12px 40px rgba(0, 0, 0, .5);
+        }
+        .pov-modal-head {
+            display: flex; align-items: center; gap: 10px;
+            padding: 10px 14px; border-bottom: 1px solid var(--SmartThemeBorderColor, #555);
+            font-weight: bold;
+        }
+        .pov-modal-head .pov-close { margin-left: auto; cursor: pointer; opacity: .7; }
+        .pov-modal-head .pov-close:hover { opacity: 1; }
+        .pov-tabs { display: flex; gap: 4px; padding: 8px 12px 0; flex-wrap: wrap; }
+        .pov-tab {
+            padding: 6px 14px; cursor: pointer; border-radius: 8px 8px 0 0;
+            border: 1px solid transparent; border-bottom: none; opacity: .7; font-size: .95em;
+        }
+        .pov-tab:hover { opacity: 1; }
+        .pov-tab.pov-active {
+            opacity: 1; font-weight: bold;
+            border-color: var(--SmartThemeBorderColor, #555);
+            background: var(--black30a, rgba(0,0,0,.25));
+        }
+        .pov-panes { flex: 1; overflow-y: auto; padding: 14px; }
+        .pov-pane { display: none; }
+        .pov-pane.pov-active { display: block; }
+        .pov-card {
+            border: 1px solid var(--SmartThemeBorderColor, #555); border-radius: 10px;
+            padding: 12px; margin-bottom: 12px; background: var(--black30a, rgba(0,0,0,.18));
+        }
+        .pov-card > h4 { margin: 0 0 8px; font-size: 1em; }
+        .pov-card label { display: block; margin-top: 8px; font-size: .92em; opacity: .9; }
+        .pov-card small { display: block; opacity: .65; font-size: .85em; margin-top: 2px; }
+        .pov-card textarea, .pov-card input[type="text"], .pov-card input[type="password"], .pov-card input[type="number"], .pov-card select {
+            width: 100%; box-sizing: border-box;
+        }
+        .pov-badge {
+            display: inline-block; font-size: .75em; padding: 1px 7px; border-radius: 999px;
+            border: 1px solid var(--SmartThemeBorderColor, #555); opacity: .8; margin-left: 6px;
+        }
+        .pov-badge.pov-badge-fixed { border-color: #c9a227; color: #e0b93a; }
+        .pov-badge.pov-badge-normal { border-color: #4a90d9; color: #6fb0f0; }
+        .pov-modal-foot {
+            display: flex; align-items: center; gap: 10px;
+            padding: 10px 14px; border-top: 1px solid var(--SmartThemeBorderColor, #555);
+        }
+        .pov-modal-foot .menu_button { flex: 0 0 auto; white-space: nowrap; }
+        .pov-modal-foot small { flex: 1 1 auto; min-width: 0; opacity: .8; overflow-wrap: anywhere; }
+        .pov-prompt-field { border-top: 1px dashed var(--SmartThemeBorderColor, #555); padding-top: 10px; margin-top: 10px; }
+        .pov-prompt-field:first-child { border-top: none; margin-top: 0; padding-top: 0; }
+    `;
+    document.head.append(style);
+}
+
 function renderSettings() {
     const root = document.getElementById('extensions_settings2');
     if (!root || document.getElementById('pov_agents_settings')) return;
 
+    injectSettingsStyles();
     const settings = getSettings();
-    const context = getContext();
-    const connectionProfiles = getPovConnectionProfiles();
-    const selectedProfileExists = connectionProfiles.some(profile => profile.id === settings.connectionProfileId);
-    const connectionOptions = [
-        '<option value="">（未选择）</option>',
-        ...connectionProfiles.map(profile => `<option value="${escapeHtml(profile.id)}" ${profile.id === settings.connectionProfileId ? 'selected' : ''}>${escapeHtml(profile.name || profile.api || profile.id)}</option>`),
-    ].join('');
-    const presetNames = getChatCompletionPresetNames();
-    const presetOptions = [
-        '<option value="">（不使用预设）</option>',
-        ...presetNames.map(name => `<option value="${escapeHtml(name)}" ${name === settings.childPreset ? 'selected' : ''}>${escapeHtml(name)}</option>`),
-    ].join('');
     const container = document.createElement('div');
     container.id = 'pov_agents_settings';
     container.className = 'extension_settings';
     container.innerHTML = `
         <div class="inline-drawer">
             <div class="inline-drawer-toggle inline-drawer-header">
-                <b>POV Agents / 导演-局部视角代理（实验版 ${EXTENSION_VERSION}）</b>
+                <b>POV Agents / 局部视角代理 <span class="pov-ver">${EXTENSION_VERSION}</span></b>
                 <div class="inline-drawer-icon fa-solid fa-circle-chevron-down"></div>
             </div>
             <div class="inline-drawer-content">
                 <label class="checkbox_label">
                     <input id="pov_agents_enabled" type="checkbox" ${settings.enabled ? 'checked' : ''}>
-                    <span>允许主模型按需调用局部视角子代理</span>
-                </label>
-                <label class="checkbox_label">
-                    <input id="pov_agents_aggressive" type="checkbox" ${settings.aggressive ? 'checked' : ''}>
-                    <span>更积极调用（每轮倾向推演一次在场角色的局部视角，触发率更高）</span>
-                </label>
-                <label class="checkbox_label">
-                    <input id="pov_agents_inline" type="checkbox" ${settings.inlineDelegation ? 'checked' : ''}>
-                    <span>子代理不占楼层（本轮结束后自动合并中间楼层，正文保持在原楼层；调用详情折叠显示在本楼内）</span>
+                    <span>启用（主 AI 按需委派局部视角子代理）</span>
                 </label>
                 <label class="checkbox_label">
                     <input id="pov_agents_always" type="checkbox" ${settings.alwaysDelegate ? 'checked' : ''}>
-                    <span>每轮必委派（跳过"是否需要"判断，每次生成都必调用子代理）</span>
+                    <span>每轮必委派</span>
+                </label>
+                <label class="checkbox_label">
+                    <input id="pov_agents_fixed_enabled" type="checkbox" ${settings.fixedRoleEnabled ? 'checked' : ''}>
+                    <span>固定扮演模式（子代理始终扮演同一角色）</span>
                 </label>
                 <label class="checkbox_label">
                     <input id="pov_agents_trace" type="checkbox" ${settings.showTrace ? 'checked' : ''}>
-                    <span>在消息内显示子代理调用详情（默认折叠：task / context / role_instructions / 子代理返回）</span>
+                    <span>在消息内显示调用详情</span>
                 </label>
-                <label class="checkbox_label">
-                    <input id="pov_agents_toast" type="checkbox" ${settings.showToast ? 'checked' : ''}>
-                    <span>调用子代理时弹出提示（右上角短暂提示，便于确认本轮是否触发）</span>
-                </label>
-                <details id="pov_agents_fixed_role">
-                    <summary><b>固定扮演模式（子代理始终扮演同一个角色）</b></summary>
-                    <small>适合只有两个人的故事：你预先写好该角色的设定，主 AI 只负责提供客观事实与感知；它塞进来的性格/心理推测会被忽略。</small>
-                    <label class="checkbox_label">
-                        <input id="pov_agents_fixed_enabled" type="checkbox" ${settings.fixedRoleEnabled ? 'checked' : ''}>
-                        <span>启用固定扮演模式</span>
-                    </label>
-                    <label for="pov_agents_fixed_name">角色名（仅用于显示）</label>
-                    <input id="pov_agents_fixed_name" class="text_pole" type="text" placeholder="例如：洛晴雪" value="${escapeHtml(settings.fixedRoleName)}">
-                    <label for="pov_agents_fixed_profile">固定设定（权威，不受本轮剧情影响）</label>
-                    <textarea id="pov_agents_fixed_profile" class="text_pole textarea_compact" rows="8" placeholder="身份、性格、说话习惯、认知边界、禁忌、已知与未知……">${escapeHtml(settings.fixedRoleProfile)}</textarea>
-                    <label for="pov_agents_fixed_task">固定推演任务（留空则用默认）</label>
-                    <textarea id="pov_agents_fixed_task" class="text_pole textarea_compact" rows="3" placeholder="留空 = 以该角色的有限视角，推演其此刻会注意到什么、会怎么想、最可能怎么做。">${escapeHtml(settings.fixedRoleTask)}</textarea>
-                </details>
-
-                <label for="pov_agents_mode">子代理连接方式</label>
-                <select id="pov_agents_mode" class="text_pole">
-                    <option value="custom" ${settings.connectionMode === 'custom' ? 'selected' : ''}>自定义 API（默认；全部留空即继承主 AI）</option>
-                    <option value="main" ${settings.connectionMode === 'main' ? 'selected' : ''}>使用主模型连接</option>
-                    <option value="profile" ${settings.connectionMode === 'profile' ? 'selected' : ''}>使用 Connection Manager 配置</option>
-                </select>
-                <small>要给子代理单独配 API / Key / 预设 → 保持选「自定义 API」即可（各字段留空则继承主 AI）。</small>
-
-                <div id="pov_agents_profile_block">
-                    <label for="pov_agents_connection_profile">Connection Manager 配置</label>
-                    <select id="pov_agents_connection_profile" class="text_pole">${connectionOptions}</select>
-                    <small>在 Connection Manager 中先保存 Chat Completion 配置（API、模型、URL、密钥凭据），再到这里选择。密钥使用酒馆的 Secret 管理。</small>
-                </div>
-
-                <div id="pov_agents_custom_block">
-                    <small>以下字段<b>留空即继承主 AI</b>：地址空→用主 AI 的接口与密钥；模型空→用主 AI 的模型；预设空→用主 AI 当前预设。</small>
-                    <label for="pov_agents_api_url">API 地址（留空 = 主 AI 的接口）</label>
-                    <input id="pov_agents_api_url" class="text_pole" type="text" placeholder="（留空则用主 AI）https://api.deepseek.com/v1" value="${escapeHtml(settings.childApiUrl)}">
-                    <label for="pov_agents_api_key">API Key（地址与主 AI 不同时必填）</label>
-                    <input id="pov_agents_api_key" class="text_pole" type="password" placeholder="（留空则用主 AI 的密钥）" value="${escapeHtml(settings.childApiKey)}">
-                    <small>密钥保存在你的 SillyTavern 用户设置文件中（仅本机）。如需加密存储，请改用 Connection Manager 方式。若地址与主 AI 相同，留空即自动用主 AI 的密钥。</small>
-                    <label for="pov_agents_model">模型名（留空 = 主 AI 的模型）</label>
-                    <input id="pov_agents_model" class="text_pole" type="text" placeholder="（留空则用主 AI）deepseek-chat" value="${escapeHtml(settings.childModel)}">
-                    <label for="pov_agents_preset">预设（留空 = 主 AI 当前预设）</label>
-                    <select id="pov_agents_preset" class="text_pole">${presetOptions}</select>
-                    <small>预设的采样参数（temperature / top_p / 惩罚项等）会应用到子代理请求；不改变你的主对话设置。</small>
-                </div>
-
-                <details id="pov_agents_prompt_editor">
-                    <summary><b>提示词模板（可自行修改）</b></summary>
-                    <small>下面四段是扩展发给模型的全部提示词。留空 = 使用内置默认值；填了就用你的。点“恢复默认”可清空该项。</small>
-                    ${Object.entries(PROMPT_TEMPLATES).map(([key, template]) => `
-                        <div class="pov-prompt-field" data-key="${key}">
-                            <label for="pov_agents_prompt_${key}"><b>${escapeHtml(template.label)}</b></label>
-                            <small>${escapeHtml(template.hint)}</small>
-                            <textarea id="pov_agents_prompt_${key}" class="text_pole textarea_compact" rows="6">${escapeHtml(getPromptTemplate(key))}</textarea>
-                            <div class="flex-container">
-                                <button class="menu_button pov-prompt-reset" data-key="${key}">恢复默认</button>
-                                <small class="pov-prompt-state"></small>
-                            </div>
-                        </div>`).join('')}
-                </details>
-
-                <label for="pov_agents_response_length">子代理最大回复长度（token）</label>
-                <input id="pov_agents_response_length" class="text_pole" type="number" min="${MIN_RESPONSE_LENGTH}" value="${settings.responseLength}">
-                <small>子代理输出上限（token），不设上限。若子模型是推理模型（思考会先占用 token），请调大（建议 4096 以上）。</small>
                 <div class="flex-container">
-                    <button id="pov_agents_save" class="menu_button">保存设置</button>
-                    <button id="pov_agents_test" class="menu_button">测试子代理连接</button>
+                    <button id="pov_agents_open" class="menu_button"><i class="fa-solid fa-sliders"></i> 详细设置</button>
                     <small id="pov_agents_status"></small>
                 </div>
             </div>
         </div>`;
     root.append(container);
 
-    const customBlock = container.querySelector('#pov_agents_custom_block');
-    const profileBlock = container.querySelector('#pov_agents_profile_block');
-    const modeSelect = container.querySelector('#pov_agents_mode');
+    // Quick toggles save immediately.
+    const quickToggles = {
+        pov_agents_enabled: 'enabled',
+        pov_agents_always: 'alwaysDelegate',
+        pov_agents_fixed_enabled: 'fixedRoleEnabled',
+        pov_agents_trace: 'showTrace',
+    };
+    for (const [id, key] of Object.entries(quickToggles)) {
+        container.querySelector(`#${id}`).addEventListener('change', event => {
+            getSettings()[key] = event.target.checked;
+            saveSettings();
+            updateSettingsStatus();
+            for (let i = 0; i < getContext().chat.length; i++) {
+                renderDelegationTrace(i, true);
+            }
+        });
+    }
 
+    container.querySelector('#pov_agents_open').addEventListener('click', openSettingsModal);
+    updateSettingsStatus();
+}
+
+/**
+ * Refreshes the status line in the settings panel.
+ */
+function updateSettingsStatus() {
+    const status = document.querySelector('#pov_agents_status');
+    if (status) {
+        status.textContent = describeConnection(getSettings());
+    }
+}
+
+/**
+ * Builds (once) the floating settings window.
+ * @returns {HTMLElement} Modal element
+ */
+function buildSettingsModal() {
+    const modal = document.createElement('div');
+    modal.id = 'pov_agents_modal';
+    modal.className = 'pov-modal';
+    modal.innerHTML = `
+        <div class="pov-modal-box">
+            <div class="pov-modal-head">
+                <i class="fa-solid fa-sliders"></i>
+                <span>POV Agents 详细设置</span>
+                <span class="pov-ver">${EXTENSION_VERSION}</span>
+                <i class="fa-solid fa-xmark pov-close" title="关闭"></i>
+            </div>
+            <div class="pov-tabs">
+                <div class="pov-tab pov-active" data-pane="connection">连接</div>
+                <div class="pov-tab" data-pane="fixed">固定扮演</div>
+                <div class="pov-tab" data-pane="prompts">提示词模板</div>
+                <div class="pov-tab" data-pane="advanced">高级</div>
+            </div>
+            <div class="pov-panes">
+                <div class="pov-pane pov-active" data-pane="connection">
+                    <div class="pov-card">
+                        <h4>子代理连接方式</h4>
+                        <select id="pov_agents_mode" class="text_pole">
+                            <option value="custom">自定义 API（可单独配地址 / 模型 / Key / 预设）</option>
+                            <option value="main">使用主模型连接</option>
+                            <option value="profile">使用 Connection Manager 配置</option>
+                        </select>
+                        <small>各字段留空即继承主 AI，所以零配置也能用。</small>
+                    </div>
+                    <div class="pov-card" id="pov_agents_custom_block">
+                        <h4>自定义 API</h4>
+                        <label for="pov_agents_api_url">API 地址（留空 = 主 AI 的接口）</label>
+                        <input id="pov_agents_api_url" class="text_pole" type="text" placeholder="（留空则用主 AI）https://api.deepseek.com/v1">
+                        <label for="pov_agents_api_key">API Key（地址与主 AI 不同时必填）</label>
+                        <input id="pov_agents_api_key" class="text_pole" type="password" placeholder="（留空则用主 AI 的密钥）">
+                        <small>密钥保存在本机 SillyTavern 用户设置文件中；需要加密存储请改用 Connection Manager。</small>
+                        <label for="pov_agents_model">模型名（留空 = 主 AI 的模型）</label>
+                        <input id="pov_agents_model" class="text_pole" type="text" placeholder="（留空则用主 AI）deepseek-chat">
+                        <label for="pov_agents_preset">预设（留空 = 主 AI 当前预设）</label>
+                        <select id="pov_agents_preset" class="text_pole"></select>
+                        <small>预设的采样参数会应用到子代理请求，不影响主对话设置。</small>
+                    </div>
+                    <div class="pov-card" id="pov_agents_profile_block">
+                        <h4>Connection Manager 配置</h4>
+                        <select id="pov_agents_connection_profile" class="text_pole"></select>
+                        <small>密钥由 SillyTavern Secret 管理。</small>
+                    </div>
+                </div>
+
+                <div class="pov-pane" data-pane="fixed">
+                    <div class="pov-card">
+                        <h4>固定扮演模式</h4>
+                        <small>适合只有两个人的故事：你预先写好该角色的设定，主 AI 只负责提供客观事实与感知；它塞进来的性格/心理推测会被忽略。</small>
+                        <label for="pov_agents_fixed_name">角色名（仅用于显示）</label>
+                        <input id="pov_agents_fixed_name" class="text_pole" type="text" placeholder="例如：洛晴雪">
+                        <label for="pov_agents_fixed_profile">固定设定（权威，不受本轮剧情影响）</label>
+                        <textarea id="pov_agents_fixed_profile" class="text_pole textarea_compact" rows="10" placeholder="身份、性格、说话习惯、认知边界、禁忌、已知与未知……"></textarea>
+                        <label for="pov_agents_fixed_task">固定推演任务（留空则用默认）</label>
+                        <textarea id="pov_agents_fixed_task" class="text_pole textarea_compact" rows="3" placeholder="留空 = 以该角色的有限视角，推演其此刻会注意到什么、会怎么想、最可能怎么做。"></textarea>
+                    </div>
+                </div>
+
+                <div class="pov-pane" data-pane="prompts">
+                    <div class="pov-card">
+                        <h4>提示词模板</h4>
+                        <small>留空 = 使用内置默认值；填了就用你的。带「固定扮演专用 / 普通模式专用」标记的模板只在对应模式下生效。</small>
+                        ${Object.entries(PROMPT_TEMPLATES).map(([key, template]) => `
+                            <div class="pov-prompt-field" data-key="${key}">
+                                <label for="pov_agents_prompt_${key}"><b>${escapeHtml(template.label)}</b>${scopeBadge(template.scope)}</label>
+                                <small>${escapeHtml(template.hint)}</small>
+                                <textarea id="pov_agents_prompt_${key}" class="text_pole textarea_compact" rows="6"></textarea>
+                                <div class="flex-container">
+                                    <button class="menu_button pov-prompt-reset" data-key="${key}">恢复默认</button>
+                                    <small class="pov-prompt-state"></small>
+                                </div>
+                            </div>`).join('')}
+                    </div>
+                </div>
+
+                <div class="pov-pane" data-pane="advanced">
+                    <div class="pov-card">
+                        <h4>行为</h4>
+                        <label class="checkbox_label"><input id="pov_agents_aggressive" type="checkbox"><span>更积极调用（提高委派概率）</span></label>
+                        <label class="checkbox_label"><input id="pov_agents_inline" type="checkbox"><span>子代理不占楼层（合并中间楼层）</span></label>
+                        <label class="checkbox_label"><input id="pov_agents_toast" type="checkbox"><span>调用时弹出提示</span></label>
+                    </div>
+                    <div class="pov-card">
+                        <h4>子代理输出</h4>
+                        <label for="pov_agents_response_length">最大回复长度（token）</label>
+                        <input id="pov_agents_response_length" class="text_pole" type="number" min="${MIN_RESPONSE_LENGTH}">
+                        <small>推理模型建议 16384 以上，否则思考会吃光预算导致空回复。</small>
+                    </div>
+                </div>
+            </div>
+            <div class="pov-modal-foot">
+                <button id="pov_agents_save" class="menu_button">保存设置</button>
+                <button id="pov_agents_test" class="menu_button">测试子代理连接</button>
+                <small id="pov_agents_modal_status"></small>
+            </div>
+        </div>`;
+
+    modal.addEventListener('click', event => {
+        if (event.target === modal) {
+            closeSettingsModal();
+        }
+    });
+    modal.querySelector('.pov-close').addEventListener('click', closeSettingsModal);
+
+    modal.querySelectorAll('.pov-tab').forEach(tab => {
+        tab.addEventListener('click', () => {
+            modal.querySelectorAll('.pov-tab').forEach(t => t.classList.toggle('pov-active', t === tab));
+            modal.querySelectorAll('.pov-pane').forEach(pane => {
+                pane.classList.toggle('pov-active', pane.dataset.pane === tab.dataset.pane);
+            });
+        });
+    });
+
+    const modeSelect = modal.querySelector('#pov_agents_mode');
     const syncModeVisibility = () => {
-        customBlock.style.display = modeSelect.value === 'custom' ? '' : 'none';
-        profileBlock.style.display = modeSelect.value === 'profile' ? '' : 'none';
+        modal.querySelector('#pov_agents_custom_block').style.display = modeSelect.value === 'custom' ? '' : 'none';
+        modal.querySelector('#pov_agents_profile_block').style.display = modeSelect.value === 'profile' ? '' : 'none';
     };
     modeSelect.addEventListener('change', syncModeVisibility);
-    syncModeVisibility();
 
-    container.querySelectorAll('.pov-prompt-reset').forEach(button => {
+    modal.querySelectorAll('.pov-prompt-reset').forEach(button => {
         button.addEventListener('click', () => {
             const key = button.dataset.key;
-            const field = container.querySelector(`#pov_agents_prompt_${key}`);
+            const field = modal.querySelector(`#pov_agents_prompt_${key}`);
             if (field) {
                 field.value = PROMPT_TEMPLATES[key].value;
             }
@@ -208,46 +349,14 @@ function renderSettings() {
         });
     });
 
-    container.querySelector('#pov_agents_save').addEventListener('click', () => {
-        const settings = getSettings();
-        settings.enabled = container.querySelector('#pov_agents_enabled').checked;
-        settings.aggressive = container.querySelector('#pov_agents_aggressive').checked;
-        settings.forceCall = container.querySelector('#pov_agents_force')?.checked ?? false;
-        settings.inlineDelegation = container.querySelector('#pov_agents_inline')?.checked ?? true;
-        settings.showTrace = container.querySelector('#pov_agents_trace').checked;
-        settings.showToast = container.querySelector('#pov_agents_toast').checked;
-        settings.alwaysDelegate = container.querySelector('#pov_agents_always').checked;
-        settings.connectionMode = modeSelect.value;
-        settings.connectionProfileId = container.querySelector('#pov_agents_connection_profile').value;
-        settings.childApiUrl = container.querySelector('#pov_agents_api_url').value.trim();
-        settings.childModel = container.querySelector('#pov_agents_model').value.trim();
-        settings.childApiKey = container.querySelector('#pov_agents_api_key').value.trim();
-        settings.childPreset = container.querySelector('#pov_agents_preset').value;
-        settings.fixedRoleEnabled = container.querySelector('#pov_agents_fixed_enabled').checked;
-        settings.fixedRoleName = container.querySelector('#pov_agents_fixed_name').value.trim();
-        settings.fixedRoleProfile = container.querySelector('#pov_agents_fixed_profile').value.trim();
-        settings.fixedRoleTask = container.querySelector('#pov_agents_fixed_task').value.trim();
-        settings.responseLength = Number(container.querySelector('#pov_agents_response_length').value) || DEFAULT_SETTINGS.responseLength;
-
-        // Only store prompt overrides that actually differ from the built-in defaults.
-        settings.prompts = {};
-        for (const key of Object.keys(PROMPT_TEMPLATES)) {
-            const field = container.querySelector(`#pov_agents_prompt_${key}`);
-            const value = field ? field.value.trim() : '';
-            if (value && value !== PROMPT_TEMPLATES[key].value) {
-                settings.prompts[key] = value;
-            }
-        }
-        getSettings();
-        saveSettings();
-        for (let i = 0; i < context.chat.length; i++) {
-            renderDelegationTrace(i, true);
-        }
-        container.querySelector('#pov_agents_status').textContent = describeConnection(settings);
+    modal.querySelector('#pov_agents_save').addEventListener('click', () => {
+        saveModalSettings(modal);
+        modal.querySelector('#pov_agents_modal_status').textContent = '已保存 ✅';
+        updateSettingsStatus();
     });
 
-    container.querySelector('#pov_agents_test').addEventListener('click', async () => {
-        const status = container.querySelector('#pov_agents_status');
+    modal.querySelector('#pov_agents_test').addEventListener('click', async () => {
+        const status = modal.querySelector('#pov_agents_modal_status');
         status.textContent = '正在测试子代理连接…';
         try {
             const reply = await consultLocalPovAgent({
@@ -255,11 +364,129 @@ function renderSettings() {
                 context: '这是一次连接测试。',
                 role_instructions: '',
             });
-            status.textContent = `✅ 连接成功，子代理返回 ${reply.length} 字：${reply.slice(0, 40)}…`;
+            status.textContent = `✅ 连接成功，返回 ${reply.length} 字：${reply.slice(0, 40)}…`;
         } catch (error) {
             status.textContent = `❌ 连接失败：${error?.message ?? error}`;
         }
     });
+
+    return modal;
+}
+
+/**
+ * @param {string} scope Template scope
+ * @returns {string} Badge HTML
+ */
+function scopeBadge(scope) {
+    if (scope === 'fixed') return '<span class="pov-badge pov-badge-fixed">固定扮演专用</span>';
+    if (scope === 'normal') return '<span class="pov-badge pov-badge-normal">普通模式专用</span>';
+    return '';
+}
+
+/**
+ * Opens the floating settings window, refreshing its values first.
+ */
+function openSettingsModal() {
+    injectSettingsStyles();
+    let modal = document.getElementById('pov_agents_modal');
+    if (!modal) {
+        modal = buildSettingsModal();
+        document.body.append(modal);
+    }
+    fillSettingsModal(modal);
+    modal.classList.add('pov-open');
+}
+
+function closeSettingsModal() {
+    document.getElementById('pov_agents_modal')?.classList.remove('pov-open');
+}
+
+/**
+ * Pushes current settings into the modal form.
+ * @param {HTMLElement} modal Modal element
+ */
+function fillSettingsModal(modal) {
+    const settings = getSettings();
+
+    const connectionProfiles = getPovConnectionProfiles();
+    modal.querySelector('#pov_agents_connection_profile').innerHTML = [
+        '<option value="">（未选择）</option>',
+        ...connectionProfiles.map(profile => `<option value="${escapeHtml(profile.id)}" ${profile.id === settings.connectionProfileId ? 'selected' : ''}>${escapeHtml(profile.name || profile.api || profile.id)}</option>`),
+    ].join('');
+
+    modal.querySelector('#pov_agents_preset').innerHTML = [
+        '<option value="">（不使用预设）</option>',
+        ...getChatCompletionPresetNames().map(name => `<option value="${escapeHtml(name)}" ${name === settings.childPreset ? 'selected' : ''}>${escapeHtml(name)}</option>`),
+    ].join('');
+
+    modal.querySelector('#pov_agents_mode').value = settings.connectionMode;
+    modal.querySelector('#pov_agents_api_url').value = settings.childApiUrl;
+    modal.querySelector('#pov_agents_api_key').value = settings.childApiKey;
+    modal.querySelector('#pov_agents_model').value = settings.childModel;
+    modal.querySelector('#pov_agents_fixed_name').value = settings.fixedRoleName;
+    modal.querySelector('#pov_agents_fixed_profile').value = settings.fixedRoleProfile;
+    modal.querySelector('#pov_agents_fixed_task').value = settings.fixedRoleTask;
+    modal.querySelector('#pov_agents_aggressive').checked = settings.aggressive;
+    modal.querySelector('#pov_agents_inline').checked = settings.inlineDelegation;
+    modal.querySelector('#pov_agents_toast').checked = settings.showToast;
+    modal.querySelector('#pov_agents_response_length').value = settings.responseLength;
+
+    for (const key of Object.keys(PROMPT_TEMPLATES)) {
+        const field = modal.querySelector(`#pov_agents_prompt_${key}`);
+        if (field) {
+            field.value = getPromptTemplate(key);
+        }
+    }
+
+    modal.querySelector('#pov_agents_mode').dispatchEvent(new Event('change'));
+    modal.querySelector('#pov_agents_modal_status').textContent = '';
+}
+
+/**
+ * Reads the modal form and persists it.
+ * @param {HTMLElement} modal Modal element
+ */
+function saveModalSettings(modal) {
+    const settings = getSettings();
+    settings.connectionMode = modal.querySelector('#pov_agents_mode').value;
+    settings.connectionProfileId = modal.querySelector('#pov_agents_connection_profile').value;
+    settings.childApiUrl = modal.querySelector('#pov_agents_api_url').value.trim();
+    settings.childApiKey = modal.querySelector('#pov_agents_api_key').value.trim();
+    settings.childModel = modal.querySelector('#pov_agents_model').value.trim();
+    settings.childPreset = modal.querySelector('#pov_agents_preset').value;
+    settings.fixedRoleName = modal.querySelector('#pov_agents_fixed_name').value.trim();
+    settings.fixedRoleProfile = modal.querySelector('#pov_agents_fixed_profile').value.trim();
+    settings.fixedRoleTask = modal.querySelector('#pov_agents_fixed_task').value.trim();
+    settings.aggressive = modal.querySelector('#pov_agents_aggressive').checked;
+    settings.inlineDelegation = modal.querySelector('#pov_agents_inline').checked;
+    settings.showToast = modal.querySelector('#pov_agents_toast').checked;
+    settings.responseLength = Number(modal.querySelector('#pov_agents_response_length').value) || DEFAULT_SETTINGS.responseLength;
+
+    // Only store prompt overrides that actually differ from the built-in defaults.
+    settings.prompts = {};
+    for (const key of Object.keys(PROMPT_TEMPLATES)) {
+        const field = modal.querySelector(`#pov_agents_prompt_${key}`);
+        const value = field ? field.value.trim() : '';
+        if (value && value !== PROMPT_TEMPLATES[key].value) {
+            settings.prompts[key] = value;
+        }
+    }
+
+    getSettings();
+    saveSettings();
+
+    // Keep the quick toggles in the panel in sync.
+    const panel = document.getElementById('pov_agents_settings');
+    if (panel) {
+        panel.querySelector('#pov_agents_enabled').checked = settings.enabled;
+        panel.querySelector('#pov_agents_always').checked = settings.alwaysDelegate;
+        panel.querySelector('#pov_agents_fixed_enabled').checked = settings.fixedRoleEnabled;
+        panel.querySelector('#pov_agents_trace').checked = settings.showTrace;
+    }
+
+    for (let i = 0; i < getContext().chat.length; i++) {
+        renderDelegationTrace(i, true);
+    }
 }
 
 /**
@@ -601,6 +828,7 @@ function parseDecision(text) {
 const PROMPT_TEMPLATES = {
     decisionSystem: {
         label: '① 导演决策 — 系统提示',
+        scope: 'always',
         hint: '发给主 AI，用于判断"本轮是否需要子代理"。占位符：无。',
         value: [
             '你是本轮叙事的导演，掌握完整上下文。你的任务：判断本轮是否需要咨询一个"局部视角子代理"来推演某个角色的有限认知。',
@@ -611,6 +839,7 @@ const PROMPT_TEMPLATES = {
     },
     decisionFormat: {
         label: '② 导演决策 — 参数格式与纪律',
+        scope: 'normal',
         hint: '接在系统提示之后，规定 JSON 结构与参数纪律。占位符：无。',
         value: [
             '需要时输出：{"delegate":true,"task":"...","context":"...","role_instructions":"..."}',
@@ -623,6 +852,7 @@ const PROMPT_TEMPLATES = {
     },
     childSystem: {
         label: '③ 子代理 — 系统提示',
+        scope: 'always',
         hint: '发给子 AI 的角色约束与输出格式。占位符：{{roleInstructionsBlock}}（角色设定块，可能为空）、{{roleInstructions}}（仅设定正文）。',
         value: [
             '你是一个被主 AI 临时调用的局部视角子代理。主 AI 是导演，掌握完整上下文；你只获得它明确传来的任务与材料。',
@@ -635,29 +865,9 @@ const PROMPT_TEMPLATES = {
             '{{roleInstructionsBlock}}',
         ].join('\n'),
     },
-    fixedDecisionFormat: {
-        label: '⑤ 固定扮演 — 导演决策格式',
-        hint: '开启固定扮演模式时使用。只让主 AI 提供客观事实与感知，不要求它写角色设定。占位符：无。',
-        value: [
-            '需要时输出：{"delegate":true,"context":"..."}',
-            '不需要时输出：{"delegate":false}',
-            '说明：本轮你只需要提供【客观事实摘要】与【该角色能感知到的信息】。',
-            '- context：故事至今发生的客观事实 + 该角色此刻能看到/听到/闻到/触到的内容。',
-            '- 严禁写入任何角色的性格、心理、动机、情绪推测或未公开设定；这些由扩展提供的固定设定决定。',
-            '- 不要输出 task 与 role_instructions：推演任务与角色设定由扩展提供。',
-        ].join('\n'),
-    },
-    fixedRoleGuard: {
-        label: '⑥ 固定扮演 — 设定优先声明',
-        hint: '追加到子代理系统提示末尾，用于忽略主 AI 塞进来的性格/心理推测。占位符：无。',
-        value: [
-            '【固定设定优先】上面的「固定设定」由用户预先写好，是权威设定，优先级高于材料中的任何描述。',
-            '若材料中出现关于该角色性格、心理、动机、情绪的推测或结论，一律忽略，不得作为依据；只采纳其中的客观事实与感知信息。',
-            '若材料与固定设定冲突，以固定设定为准。',
-        ].join('\n'),
-    },
     injection: {
         label: '④ 结果回注 — 给主 AI 的使用要求',
+        scope: 'always',
         hint: '子代理返回后注入到本轮提示的内容。占位符：{{keyPoints}}、{{keyPointsBlock}}、{{childReply}}。',
         value: [
             '【子代理推演结果 —— 本轮正文必须依据，优先级高于你的自由发挥】',
@@ -671,6 +881,29 @@ const PROMPT_TEMPLATES = {
             '1. 你在思考的第三步（设计情节元素）时，必须明确引用上面「必须采用的结论」，逐条说明如何落实。',
             '2. 正文中该角色的所见、所想、反应必须落在这些结论限定的有限视角内；不得让它表现得知情、熟练或超出推演范围。',
             '3. 不要原文照抄推演文本，把它当作角色行为与情绪的依据。',
+        ].join('\n'),
+    },
+    fixedDecisionFormat: {
+        label: '⑤ 固定扮演 — 导演决策格式',
+        scope: 'fixed',
+        hint: '开启固定扮演模式时使用（此时模板②不生效）。只让主 AI 提供客观事实与感知，不要求它写角色设定。占位符：无。',
+        value: [
+            '需要时输出：{"delegate":true,"context":"..."}',
+            '不需要时输出：{"delegate":false}',
+            '说明：本轮你只需要提供【客观事实摘要】与【该角色能感知到的信息】。',
+            '- context：故事至今发生的客观事实 + 该角色此刻能看到/听到/闻到/触到的内容。',
+            '- 严禁写入任何角色的性格、心理、动机、情绪推测或未公开设定；这些由扩展提供的固定设定决定。',
+            '- 不要输出 task 与 role_instructions：推演任务与角色设定由扩展提供。',
+        ].join('\n'),
+    },
+    fixedRoleGuard: {
+        label: '⑥ 固定扮演 — 设定优先声明',
+        scope: 'fixed',
+        hint: '仅在固定扮演模式下追加到子代理系统提示末尾，用于忽略主 AI 塞进来的性格/心理推测。占位符：无。',
+        value: [
+            '【固定设定优先】上面的「固定设定」由用户预先写好，是权威设定，优先级高于材料中的任何描述。',
+            '若材料中出现关于该角色性格、心理、动机、情绪的推测或结论，一律忽略，不得作为依据；只采纳其中的客观事实与感知信息。',
+            '若材料与固定设定冲突，以固定设定为准。',
         ].join('\n'),
     },
 };

@@ -2,7 +2,7 @@ import { extension_settings, getContext } from '../../../extensions.js';
 import { setExtensionPrompt, extension_prompt_types, extension_prompt_roles } from '../../../../script.js';
 
 const EXTENSION_KEY = 'povAgents';
-const EXTENSION_VERSION = 'v8-modal-ui';
+const EXTENSION_VERSION = 'v9-model-list';
 const PROMPT_KEY = 'pov-agents-director-guidance';
 const RECENT_PROMPT_KEY = 'pov-agents-recent-reminder';
 const RESULT_PROMPT_KEY = 'pov-agents-child-result';
@@ -248,7 +248,12 @@ function buildSettingsModal() {
                         <input id="pov_agents_api_key" class="text_pole" type="password" placeholder="（留空则用主 AI 的密钥）">
                         <small>密钥保存在本机 SillyTavern 用户设置文件中；需要加密存储请改用 Connection Manager。</small>
                         <label for="pov_agents_model">模型名（留空 = 主 AI 的模型）</label>
-                        <input id="pov_agents_model" class="text_pole" type="text" placeholder="（留空则用主 AI）deepseek-chat">
+                        <div class="flex-container">
+                            <input id="pov_agents_model" class="text_pole" type="text" list="pov_agents_model_list" placeholder="（留空则用主 AI）deepseek-chat">
+                            <button id="pov_agents_fetch_models" class="menu_button" title="从服务器拉取可用模型列表"><i class="fa-solid fa-rotate"></i> 拉取模型</button>
+                        </div>
+                        <datalist id="pov_agents_model_list"></datalist>
+                        <small id="pov_agents_model_status">点「拉取模型」可从当前地址获取模型列表，然后直接下拉选择（也可手填）。</small>
                         <label for="pov_agents_preset">预设（留空 = 主 AI 当前预设）</label>
                         <select id="pov_agents_preset" class="text_pole"></select>
                         <small>预设的采样参数会应用到子代理请求，不影响主对话设置。</small>
@@ -347,6 +352,25 @@ function buildSettingsModal() {
                 state.textContent = '已恢复默认（记得点“保存设置”生效）';
             }
         });
+    });
+
+    modal.querySelector('#pov_agents_fetch_models').addEventListener('click', async () => {
+        const status = modal.querySelector('#pov_agents_model_status');
+        status.textContent = '正在拉取模型列表…';
+        try {
+            const models = await fetchChildModelList(
+                modal.querySelector('#pov_agents_api_url').value.trim(),
+                modal.querySelector('#pov_agents_api_key').value.trim(),
+            );
+            modal.querySelector('#pov_agents_model_list').innerHTML = models
+                .map(model => `<option value="${escapeHtml(model)}"></option>`)
+                .join('');
+            status.textContent = models.length
+                ? `✅ 拉到 ${models.length} 个模型，点输入框即可下拉选择`
+                : '⚠️ 服务器未返回模型列表（可手动填写）';
+        } catch (error) {
+            status.textContent = `❌ 拉取失败：${error?.message ?? error}`;
+        }
     });
 
     modal.querySelector('#pov_agents_save').addEventListener('click', () => {
@@ -487,6 +511,52 @@ function saveModalSettings(modal) {
     for (let i = 0; i < getContext().chat.length; i++) {
         renderDelegationTrace(i, true);
     }
+}
+
+/**
+ * Asks SillyTavern's backend for the model list of the child endpoint.
+ * Reuses the same endpoint the UI's "Connect" button uses, so it also works when
+ * the child inherits the main AI connection (no plaintext key needed).
+ * @param {string} apiUrl Child API base URL (empty = inherit main AI)
+ * @param {string} apiKey Child API key (empty = inherit main AI)
+ * @returns {Promise<string[]>} Model ids
+ */
+async function fetchChildModelList(apiUrl, apiKey) {
+    const context = getContext();
+    const main = getMainConnectionInfo();
+    const ownUrl = String(apiUrl ?? '').trim();
+    const useOwnEndpoint = Boolean(ownUrl) && ownUrl !== main.url;
+
+    const body = useOwnEndpoint
+        ? {
+            chat_completion_source: 'openai',
+            reverse_proxy: ownUrl,
+            proxy_password: String(apiKey ?? '').trim() || undefined,
+        }
+        : {
+            chat_completion_source: main.source,
+            ...(main.source === 'custom' && main.url ? { custom_url: main.url } : {}),
+        };
+
+    const response = await fetch('/api/backends/chat-completions/status', {
+        method: 'POST',
+        headers: context.getRequestHeaders(),
+        body: JSON.stringify(body),
+        cache: 'no-cache',
+    });
+
+    if (!response.ok) {
+        throw new Error(`${response.status} ${response.statusText}`);
+    }
+
+    const data = await response.json();
+    if (data?.error) {
+        throw new Error('服务器返回错误（请检查地址与密钥）');
+    }
+
+    return Array.isArray(data?.data)
+        ? data.data.map(model => model?.id).filter(Boolean)
+        : [];
 }
 
 /**

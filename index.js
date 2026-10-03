@@ -2,7 +2,7 @@ import { extension_settings, getContext } from '../../../extensions.js';
 import { setExtensionPrompt, extension_prompt_types, extension_prompt_roles } from '../../../../script.js';
 
 const EXTENSION_KEY = 'povAgents';
-const EXTENSION_VERSION = 'v9-model-list';
+const EXTENSION_VERSION = 'v9.1-panel-fix';
 const PROMPT_KEY = 'pov-agents-director-guidance';
 const RECENT_PROMPT_KEY = 'pov-agents-recent-reminder';
 const RESULT_PROMPT_KEY = 'pov-agents-child-result';
@@ -71,6 +71,9 @@ function injectSettingsStyles() {
     style.id = 'pov_agent_settings_style';
     style.textContent = `
         .pov-ver { opacity: .55; font-weight: normal; font-size: .85em; }
+        #pov_agents_settings .menu_button { flex: 0 0 auto; white-space: nowrap; display: inline-flex; align-items: center; gap: 6px; }
+        #pov_agents_settings .flex-container { align-items: center; gap: 8px; }
+        #pov_agents_settings #pov_agents_status { flex: 1 1 auto; min-width: 0; opacity: .8; }
         .pov-modal {
             position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; z-index: 30000; display: none;
             align-items: center; justify-content: center;
@@ -168,7 +171,7 @@ function renderSettings() {
                     <span>在消息内显示调用详情</span>
                 </label>
                 <div class="flex-container">
-                    <button id="pov_agents_open" class="menu_button"><i class="fa-solid fa-sliders"></i> 详细设置</button>
+                    <button id="pov_agents_open" class="menu_button">详细设置</button>
                     <small id="pov_agents_status"></small>
                 </div>
             </div>

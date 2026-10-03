@@ -1,9 +1,9 @@
-{
-    "display_name": "POV Agents / 局部视角代理",
+﻿{
+    "display_name": "POV Agents / 灞€閮ㄨ瑙掍唬鐞?,
     "loading_order": 80,
     "js": "index.js",
     "author": "daidaicong",
-    "version": "1.0.0",
+    "version": "1.1.0",
     "homePage": "https://github.com/daidaicong/pov-agents",
     "generate_interceptor": "povAgentsBeforeGenerate",
     "requires": [],

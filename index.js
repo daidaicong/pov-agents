@@ -2,7 +2,7 @@ import { extension_settings, getContext } from '../../../extensions.js';
 import { setExtensionPrompt, extension_prompt_types, extension_prompt_roles } from '../../../../script.js';
 
 const EXTENSION_KEY = 'povAgents';
-const EXTENSION_VERSION = 'v6-config';
+const EXTENSION_VERSION = 'v7-prompt-editor';
 const PROMPT_KEY = 'pov-agents-director-guidance';
 const RECENT_PROMPT_KEY = 'pov-agents-recent-reminder';
 const RESULT_PROMPT_KEY = 'pov-agents-child-result';
@@ -19,12 +19,13 @@ const DEFAULT_SETTINGS = {
     inlineDelegation: true,
     showTrace: true,
     showToast: true,
-    connectionMode: 'main',
+    connectionMode: 'custom',
     connectionProfileId: '',
     childApiUrl: '',
     childApiKey: '',
     childModel: '',
     childPreset: '',
+    prompts: {},
     responseLength: 2048,
 };
 const MIN_RESPONSE_LENGTH = 64;
@@ -39,6 +40,7 @@ function getSettings() {
     settings.childApiKey ??= DEFAULT_SETTINGS.childApiKey;
     settings.childModel ??= DEFAULT_SETTINGS.childModel;
     settings.childPreset ??= DEFAULT_SETTINGS.childPreset;
+    settings.prompts ??= {};
     settings.inlineDelegation ??= DEFAULT_SETTINGS.inlineDelegation;
     settings.showTrace ??= DEFAULT_SETTINGS.showTrace;
     settings.showToast ??= DEFAULT_SETTINGS.showToast;
@@ -105,10 +107,11 @@ function renderSettings() {
                 </label>
                 <label for="pov_agents_mode">子代理连接方式</label>
                 <select id="pov_agents_mode" class="text_pole">
+                    <option value="custom" ${settings.connectionMode === 'custom' ? 'selected' : ''}>自定义 API（默认；全部留空即继承主 AI）</option>
                     <option value="main" ${settings.connectionMode === 'main' ? 'selected' : ''}>使用主模型连接</option>
                     <option value="profile" ${settings.connectionMode === 'profile' ? 'selected' : ''}>使用 Connection Manager 配置</option>
-                    <option value="custom" ${settings.connectionMode === 'custom' ? 'selected' : ''}>自定义 API（本扩展内配置）</option>
                 </select>
+                <small>要给子代理单独配 API / Key / 预设 → 保持选「自定义 API」即可（各字段留空则继承主 AI）。</small>
 
                 <div id="pov_agents_profile_block">
                     <label for="pov_agents_connection_profile">Connection Manager 配置</label>
@@ -129,6 +132,21 @@ function renderSettings() {
                     <select id="pov_agents_preset" class="text_pole">${presetOptions}</select>
                     <small>预设的采样参数（temperature / top_p / 惩罚项等）会应用到子代理请求；不改变你的主对话设置。</small>
                 </div>
+
+                <details id="pov_agents_prompt_editor">
+                    <summary><b>提示词模板（可自行修改）</b></summary>
+                    <small>下面四段是扩展发给模型的全部提示词。留空 = 使用内置默认值；填了就用你的。点“恢复默认”可清空该项。</small>
+                    ${Object.entries(PROMPT_TEMPLATES).map(([key, template]) => `
+                        <div class="pov-prompt-field" data-key="${key}">
+                            <label for="pov_agents_prompt_${key}"><b>${escapeHtml(template.label)}</b></label>
+                            <small>${escapeHtml(template.hint)}</small>
+                            <textarea id="pov_agents_prompt_${key}" class="text_pole textarea_compact" rows="6">${escapeHtml(getPromptTemplate(key))}</textarea>
+                            <div class="flex-container">
+                                <button class="menu_button pov-prompt-reset" data-key="${key}">恢复默认</button>
+                                <small class="pov-prompt-state"></small>
+                            </div>
+                        </div>`).join('')}
+                </details>
 
                 <label for="pov_agents_response_length">子代理最大回复长度（token）</label>
                 <input id="pov_agents_response_length" class="text_pole" type="number" min="${MIN_RESPONSE_LENGTH}" value="${settings.responseLength}">
@@ -153,6 +171,20 @@ function renderSettings() {
     modeSelect.addEventListener('change', syncModeVisibility);
     syncModeVisibility();
 
+    container.querySelectorAll('.pov-prompt-reset').forEach(button => {
+        button.addEventListener('click', () => {
+            const key = button.dataset.key;
+            const field = container.querySelector(`#pov_agents_prompt_${key}`);
+            if (field) {
+                field.value = PROMPT_TEMPLATES[key].value;
+            }
+            const state = button.parentElement?.querySelector('.pov-prompt-state');
+            if (state) {
+                state.textContent = '已恢复默认（记得点“保存设置”生效）';
+            }
+        });
+    });
+
     container.querySelector('#pov_agents_save').addEventListener('click', () => {
         const settings = getSettings();
         settings.enabled = container.querySelector('#pov_agents_enabled').checked;
@@ -169,6 +201,16 @@ function renderSettings() {
         settings.childApiKey = container.querySelector('#pov_agents_api_key').value.trim();
         settings.childPreset = container.querySelector('#pov_agents_preset').value;
         settings.responseLength = Number(container.querySelector('#pov_agents_response_length').value) || DEFAULT_SETTINGS.responseLength;
+
+        // Only store prompt overrides that actually differ from the built-in defaults.
+        settings.prompts = {};
+        for (const key of Object.keys(PROMPT_TEMPLATES)) {
+            const field = container.querySelector(`#pov_agents_prompt_${key}`);
+            const value = field ? field.value.trim() : '';
+            if (value && value !== PROMPT_TEMPLATES[key].value) {
+                settings.prompts[key] = value;
+            }
+        }
         getSettings();
         saveSettings();
         for (let i = 0; i < context.chat.length; i++) {
@@ -313,15 +355,9 @@ async function consultLocalPovAgent({ task, context, role_instructions = '' } = 
     const agentTask = task.trim();
     const agentContext = String(context ?? '').trim();
     const agentRoleInstructions = String(role_instructions ?? '').trim();
-    const systemPrompt = [
-        '你是一个被主 AI 临时调用的局部视角子代理。主 AI 是导演，掌握完整上下文；你只获得它明确传来的任务与材料。',
-        '绝不假定你看到了未提供的角色卡、世界书、聊天记录或设定。把材料当作全部可用证据；缺失信息必须指出，不可补造。',
-        '只分析角色在所给局部情境中的认知、判断、可能意图和候选行为。不要替主 AI 推进客观世界，不要裁定其他角色的行动或隐藏事实。',
-        '若材料中出现内心活动、动机或结论性描述，请把它视为未经证实的导演假设，不要直接当客观事实照抄；仍要基于可见线索独立推演。',
-        '给出可直接供主 AI 取舍的建议；区分材料明确支持的内容与推测，并指出关键不确定性。',
-        '输出格式：先给出分析，最后另起一节，标题写成 `### 三条结论`，下面用三行短句（每行不超过 30 字）依次列出：① 该角色的认知边界（不知道什么）；② 此刻的情绪/身体状态；③ 最可能的行为方向。三行必须能被主 AI 直接当作写作依据。',
-        agentRoleInstructions ? `主 AI 提供的角色视角/限制：\n${agentRoleInstructions}` : '',
-    ].filter(Boolean).join('\n\n');
+    const systemPrompt = applyTemplate(getPromptTemplate('childSystem'), {
+        roleInstructions: agentRoleInstructions ? `主 AI 提供的角色视角/限制：\n${agentRoleInstructions}` : '',
+    }).trim();
     const prompt = [
         `主 AI 的具体任务：\n${agentTask}`,
         agentContext ? `主 AI 选出的相关上下文（仅此为你可用的场景材料）：\n${agentContext}` : '主 AI 没有提供额外场景材料；请明确说明信息不足。',
@@ -334,12 +370,26 @@ async function consultLocalPovAgent({ task, context, role_instructions = '' } = 
         //    Any empty field falls back to the main connection.
         if (settings.connectionMode === 'custom') {
             const context = getContext();
+            const main = getMainConnectionInfo();
+            const ownUrl = settings.childApiUrl.trim();
+
+            // Nothing configured and the main API is not a chat-completion backend:
+            // fall back to the main model, which works with any main API.
+            if (!ownUrl && context.mainApi !== 'openai') {
+                const result = await context.generateRaw({
+                    prompt,
+                    systemPrompt,
+                    responseLength,
+                    quietToLoud: false,
+                    trimNames: true,
+                });
+                return String(result || '').trim();
+            }
+
             if (typeof context.ChatCompletionService?.processRequest !== 'function') {
                 throw configError('当前酒馆版本不支持 ChatCompletionService，请改用 Connection Manager 或主模型连接。');
             }
 
-            const main = getMainConnectionInfo();
-            const ownUrl = settings.childApiUrl.trim();
             const useOwnEndpoint = Boolean(ownUrl) && ownUrl !== main.url;
 
             const payload = {
@@ -511,21 +561,87 @@ function parseDecision(text) {
     }
 }
 
-const DECISION_SYSTEM = [
-    '你是本轮叙事的导演，掌握完整上下文。你的任务：判断本轮是否需要咨询一个"局部视角子代理"来推演某个角色的有限认知。',
-    '需要：本轮要写某个角色的具体反应、内心或台词，且该角色只掌握部分信息（存在信息差、隐瞒、误会或立场冲突）。',
-    '不需要：纯环境描写、纯客观事件推进、不涉及任何角色内心。',
-    '只输出一个 JSON 对象，不要输出任何其他文字、解释或代码块标记。',
-].join('\n');
+/**
+ * Every prompt the extension feeds to a model is defined here as a template, so users
+ * can override any of them from the settings panel. Placeholders use {{name}}.
+ */
+const PROMPT_TEMPLATES = {
+    decisionSystem: {
+        label: '① 导演决策 — 系统提示',
+        hint: '发给主 AI，用于判断"本轮是否需要子代理"。占位符：无。',
+        value: [
+            '你是本轮叙事的导演，掌握完整上下文。你的任务：判断本轮是否需要咨询一个"局部视角子代理"来推演某个角色的有限认知。',
+            '需要：本轮要写某个角色的具体反应、内心或台词，且该角色只掌握部分信息（存在信息差、隐瞒、误会或立场冲突）。',
+            '不需要：纯环境描写、纯客观事件推进、不涉及任何角色内心。',
+            '只输出一个 JSON 对象，不要输出任何其他文字、解释或代码块标记。',
+        ].join('\n'),
+    },
+    decisionFormat: {
+        label: '② 导演决策 — 参数格式与纪律',
+        hint: '接在系统提示之后，规定 JSON 结构与参数纪律。占位符：无。',
+        value: [
+            '需要时输出：{"delegate":true,"task":"...","context":"...","role_instructions":"..."}',
+            '不需要时输出：{"delegate":false}',
+            '参数纪律：',
+            '- task：只客观说明"要推演什么"，禁止写入你的结论、倾向、剧情走向或期望答案。',
+            '- context：只能是该角色能客观感知到的事实（亲眼所见、亲耳所闻、已知）；严禁写入任何人的内心活动、动机、情绪、未公开秘密或全知设定。',
+            '- role_instructions：只写该角色自己的性格、身份、语气与认知边界。',
+        ].join('\n'),
+    },
+    childSystem: {
+        label: '③ 子代理 — 系统提示',
+        hint: '发给子 AI 的角色约束与输出格式。占位符：{{roleInstructions}}（主 AI 填写的角色视角/边界，可能为空）。',
+        value: [
+            '你是一个被主 AI 临时调用的局部视角子代理。主 AI 是导演，掌握完整上下文；你只获得它明确传来的任务与材料。',
+            '绝不假定你看到了未提供的角色卡、世界书、聊天记录或设定。把材料当作全部可用证据；缺失信息必须指出，不可补造。',
+            '只分析角色在所给局部情境中的认知、判断、可能意图和候选行为。不要替主 AI 推进客观世界，不要裁定其他角色的行动或隐藏事实。',
+            '若材料中出现内心活动、动机或结论性描述，请把它视为未经证实的导演假设，不要直接当客观事实照抄；仍要基于可见线索独立推演。',
+            '给出可直接供主 AI 取舍的建议；区分材料明确支持的内容与推测，并指出关键不确定性。',
+            '输出格式：先给出分析，最后另起一节，标题写成 `### 三条结论`，下面用三行短句（每行不超过 30 字）依次列出：① 该角色的认知边界（不知道什么）；② 此刻的情绪/身体状态；③ 最可能的行为方向。三行必须能被主 AI 直接当作写作依据。',
+            '',
+            '{{roleInstructions}}',
+        ].join('\n'),
+    },
+    injection: {
+        label: '④ 结果回注 — 给主 AI 的使用要求',
+        hint: '子代理返回后注入到本轮提示的内容。占位符：{{keyPoints}}、{{keyPointsBlock}}、{{childReply}}。',
+        value: [
+            '【子代理推演结果 —— 本轮正文必须依据，优先级高于你的自由发挥】',
+            '',
+            '{{keyPointsBlock}}',
+            '',
+            '【完整推演】',
+            '{{childReply}}',
+            '',
+            '【使用要求】',
+            '1. 你在思考的第三步（设计情节元素）时，必须明确引用上面「必须采用的结论」，逐条说明如何落实。',
+            '2. 正文中该角色的所见、所想、反应必须落在这些结论限定的有限视角内；不得让它表现得知情、熟练或超出推演范围。',
+            '3. 不要原文照抄推演文本，把它当作角色行为与情绪的依据。',
+        ].join('\n'),
+    },
+};
 
-const DECISION_FORMAT = [
-    '需要时输出：{"delegate":true,"task":"...","context":"...","role_instructions":"..."}',
-    '不需要时输出：{"delegate":false}',
-    '参数纪律：',
-    '- task：只客观说明"要推演什么"，禁止写入你的结论、倾向、剧情走向或期望答案。',
-    '- context：只能是该角色能客观感知到的事实（亲眼所见、亲耳所闻、已知）；严禁写入任何人的内心活动、动机、情绪、未公开秘密或全知设定。',
-    '- role_instructions：只写该角色自己的性格、身份、语气与认知边界。',
-].join('\n');
+/**
+ * Replaces {{placeholders}} in a template. Unknown placeholders become empty strings.
+ * @param {string} template Template text
+ * @param {Record<string, string>} values Placeholder values
+ * @returns {string} Filled text
+ */
+function applyTemplate(template, values) {
+    return String(template ?? '').replace(/\{\{(\w+)\}\}/g, (match, key) => {
+        const value = values[key];
+        return value === undefined || value === null ? '' : String(value);
+    }).replace(/\n{3,}/g, '\n\n').trim();
+}
+
+/**
+ * @param {keyof typeof PROMPT_TEMPLATES} key Template key
+ * @returns {string} User override, or the built-in default
+ */
+function getPromptTemplate(key) {
+    const override = getSettings().prompts?.[key];
+    return (typeof override === 'string' && override.trim()) ? override : PROMPT_TEMPLATES[key].value;
+}
 
 /**
  * Runs the whole delegation before the main generation, so nothing extra ever
@@ -555,14 +671,14 @@ async function runPovAgentDirectorGuidance(chat, _contextSize, abort, type) {
 
     try {
         const decisionPrompt = [
-            DECISION_FORMAT,
+            getPromptTemplate('decisionFormat'),
             getSettings().alwaysDelegate ? '【强制委派】本轮必须委派。直接输出 delegate=true 及 task/context/role_instructions，禁止输出 {"delegate":false}。若不确定推演哪个角色，就选本轮最活跃/最受影响的那个。' : '',
             getSettings().aggressive ? '（更积极模式）除非本轮完全不涉及任何角色，否则请委派一次。' : '',
             await buildSettingExcerpt(context, chat),
             `【最近对话】\n${buildSceneExcerpt(chat)}`,
         ].filter(Boolean).join('\n\n');
 
-        const rawDecision = await requestMainModel(context, decisionPrompt, DECISION_SYSTEM);
+        const rawDecision = await requestMainModel(context, decisionPrompt, getPromptTemplate('decisionSystem'));
         if (abort?.aborted) return;
 
         const decision = parseDecision(rawDecision);
@@ -587,16 +703,11 @@ async function runPovAgentDirectorGuidance(chat, _contextSize, abort, type) {
 
         setExtensionPrompt(
             RESULT_PROMPT_KEY,
-            [
-                '【子代理推演结果 —— 本轮正文必须依据，优先级高于你的自由发挥】',
-                keyPoints ? `【必须采用的结论】\n${keyPoints}` : '',
-                '【完整推演】',
+            applyTemplate(getPromptTemplate('injection'), {
+                keyPoints,
+                keyPointsBlock: keyPoints ? `【必须采用的结论】\n${keyPoints}` : '',
                 childReply,
-                '【使用要求】',
-                '1. 你在思考的第三步（设计情节元素）时，必须明确引用上面「必须采用的结论」，逐条说明如何落实。',
-                '2. 正文中该角色的所见、所想、反应必须落在这些结论限定的有限视角内；不得让它表现得知情、熟练或超出推演范围。',
-                '3. 不要原文照抄推演文本，把它当作角色行为与情绪的依据。',
-            ].filter(Boolean).join('\n'),
+            }),
             extension_prompt_types.IN_CHAT,
             0,
             false,
